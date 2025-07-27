@@ -191,6 +191,47 @@ async def minio_events(request: Request):
 
     return {"success": True}
 
+@app.post("/sync-bucket")
+def sync_bucket():
+    # 1. List all objects in the MinIO bucket
+    paginator = s3.get_paginator('list_objects_v2')
+    uploaded = []
+    already_in_owui = []
+    errors = []
+
+    for page in paginator.paginate(Bucket=MINIO_BUCKET):
+        for obj in page.get('Contents', []):
+            object_key = obj['Key']
+            # 2. Check mapping
+            existing_file_id = MAPPING.get(object_key)
+            if existing_file_id:
+                print(f"[SKIP] {object_key} already in WebUI as {existing_file_id}")
+                already_in_owui.append(object_key)
+                continue
+            print(f"[SYNC] {object_key} not in WebUI, uploading...")
+            # 3. Download object
+            try:
+                local_path = download_minio_object(object_key)
+                try:
+                    # 4. Upload to WebUI
+                    upload_resp = upload_file(local_path)
+                    file_id = upload_resp['id']
+                    add_file_to_knowledge(KNOWLEDGE_ID, file_id)
+                    MAPPING.set(object_key, file_id)
+                    uploaded.append(object_key)
+                    print(f"[OK] Uploaded {object_key} as {file_id}")
+                finally:
+                    os.remove(local_path)
+            except Exception as e:
+                print(f"[ERR] Failed {object_key}: {e}")
+                errors.append({"object_key":object_key, "error":str(e)})
+
+    return {
+        "uploaded": uploaded,
+        "already_in_owui": already_in_owui,
+        "errors": errors,
+    }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=5005, reload=True)
