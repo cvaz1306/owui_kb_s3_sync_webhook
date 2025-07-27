@@ -169,7 +169,7 @@ async def minio_events(request: Request):
         bucket_name = record['s3']['bucket']['name']
         print(f"MinIO event: {event_name} {object_key} in {bucket_name}")
 
-        if event_name.startswith('s3:ObjectCreated:'):
+        if event_name.startswith('s3:ObjectCreated:') and object_key.endswith('.md'):
             # Step 1: Download from MinIO
             local_path = download_minio_object(object_key, bucket_name)
             try:
@@ -180,7 +180,7 @@ async def minio_events(request: Request):
                 MAPPING.set(object_key, file_id)
             finally:
                 os.remove(local_path)
-        elif event_name.startswith('s3:ObjectRemoved:'):
+        elif event_name.startswith('s3:ObjectRemoved:') and object_key.endswith('.md'):
             file_id = MAPPING.get(object_key)
             if file_id:
                 print(f"[Deleted] {object_key}: Removing id={file_id} from KB {KNOWLEDGE_ID} and mapping store.")
@@ -202,6 +202,9 @@ def sync_bucket():
     for page in paginator.paginate(Bucket=MINIO_BUCKET):
         for obj in page.get('Contents', []):
             object_key = obj['Key']
+            if not object_key.endswith('.md'):
+                print(f"[SKIP] {object_key} not a markdown file, skipping")
+                continue
             # 2. Check mapping
             existing_file_id = MAPPING.get(object_key)
             if existing_file_id:
