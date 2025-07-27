@@ -25,7 +25,14 @@ docker run -p 5005:5005 fastapi-minio-webhook
 Use [`mc`](https://min.io/docs/minio/linux/reference/minio-mc.html) on the MinIO server/host to add a webhook event:
 
 ```bash
-mc event add myminio/mybucket arn:minio:sqs::webhook --event put,delete --address http://HOST:5005/minio-events
+mc admin config set myminio notify_webhook:primary endpoint="http://192.168.1.35:5005/minio-events"
+mc admin service restart myminio
+```
+
+Then, bind the webhook to the bucket you want to monitor:
+
+```bash
+mc event add myminio/obsidian-vault arn:minio:sqs::primary:webhook --event "put,delete"
 ```
 
 - Replace `myminio` with your MinIO alias (check via `mc alias ls`)
