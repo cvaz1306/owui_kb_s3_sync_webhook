@@ -126,6 +126,19 @@ def upload_file(file_path:str) -> dict:
     resp.raise_for_status()
     return resp.json()
 
+def delete_file_in_webui(file_id: str):
+    url = f'{WEBUI_URL}/api/v1/files/{file_id}'
+    headers = {
+        'Authorization': f'Bearer {TOKEN}',
+        'Accept': 'application/json'
+    }
+    resp = requests.delete(url, headers=headers)
+    if resp.status_code != 204:
+        # Open WebUI may return 200 or 204, or error
+        print(f"[Warning] Deleting file_id {file_id} got status {resp.status_code}: {resp.text}")
+    else:
+        print(f"[OK] Deleted file_id {file_id} in WebUI.")
+
 def add_file_to_knowledge(knowledge_id:str, file_id:str):
     url = f'{WEBUI_URL}/api/v1/knowledge/{knowledge_id}/file/add'
     headers = {
@@ -170,7 +183,19 @@ async def minio_events(request: Request):
         print(f"MinIO event: {event_name} {object_key} in {bucket_name}")
 
         if event_name.startswith('s3:ObjectCreated:') and object_key.endswith('.md'):
-            # Step 1: Download from MinIO
+            old_file_id = MAPPING.get(object_key)
+            if old_file_id:
+                print(f"[Replace] {object_key}: Removing previous id={old_file_id} from KB and deleting from WebUI.")
+                try:
+                    remove_file_from_knowledge(KNOWLEDGE_ID, old_file_id)
+                except Exception as e:
+                    print(f"[Warning] Failed to remove file {old_file_id} from knowledge: {e}")
+                try:
+                    delete_file_in_webui(old_file_id)
+                except Exception as e:
+                    print(f"[Warning] Failed to delete file {old_file_id} in WebUI: {e}")
+                MAPPING.remove(object_key)
+
             local_path = download_minio_object(object_key, bucket_name)
             try:
                 upload_resp = upload_file(local_path)
@@ -183,8 +208,16 @@ async def minio_events(request: Request):
         elif event_name.startswith('s3:ObjectRemoved:') and object_key.endswith('.md'):
             file_id = MAPPING.get(object_key)
             if file_id:
-                print(f"[Deleted] {object_key}: Removing id={file_id} from KB {KNOWLEDGE_ID} and mapping store.")
-                remove_file_from_knowledge(KNOWLEDGE_ID, file_id)
+                print(
+                    f"[Deleted] {object_key}: Removing id={file_id} from KB {KNOWLEDGE_ID}, deleting from WebUI, and removing from mapping store.")
+                try:
+                    remove_file_from_knowledge(KNOWLEDGE_ID, file_id)
+                except Exception as e:
+                    print(f"[Warning] Failed to remove file {file_id} from knowledge: {e}")
+                try:
+                    delete_file_in_webui(file_id)
+                except Exception as e:
+                    print(f"[Warning] Failed to delete file {file_id} in WebUI: {e}")
                 MAPPING.remove(object_key)
             else:
                 print(f"[Warning] {object_key}: No known file_id mapping for delete event.")
