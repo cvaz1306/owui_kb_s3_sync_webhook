@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import requests
 import boto3
 import tempfile
+from urllib.parse import unquote_plus
 
 # Optionally Redis for id mapping
 try:
@@ -14,18 +15,15 @@ except ImportError:
     redis = None
 
 load_dotenv(".env")
-
 WEBUI_URL   = os.getenv("WEBUI_URL", "http://localhost:8080")
 TOKEN       = os.getenv("TOKEN")
 MODEL       = os.getenv("MODEL", "llama3.2:latest")
 KNOWLEDGE_ID= os.getenv("KNOWLEDGE_ID")
-
 MINIO_ENDPOINT    = os.getenv("MINIO_ENDPOINT")
 MINIO_ACCESS_KEY  = os.getenv("MINIO_ACCESS_KEY")
 MINIO_SECRET_KEY  = os.getenv("MINIO_SECRET_KEY")
 MINIO_BUCKET      = os.getenv("MINIO_BUCKET")
 MINIO_SECURE      = os.getenv("MINIO_SECURE", "false").lower() == "true" # string to bool
-
 # Mapping Store config
 REDIS_URL      = os.getenv("REDIS_URL")
 MAPPING_FILE   = os.getenv("MAPPING_FILE", "mapping.json")
@@ -41,7 +39,6 @@ s3 = boto3.client(
 )
 
 ### === MAPPING STORE FOR OBJECT_KEY -> FILE_ID ===
-
 class BaseMapping:
     def set(self, object_key, file_id):
         raise NotImplementedError
@@ -113,7 +110,6 @@ def get_mapping_store():
 MAPPING = get_mapping_store()
 
 # --- WebUI API helpers ---
-
 def upload_file(file_path:str) -> dict:
     url = f'{WEBUI_URL}/api/v1/files/'
     headers = {
@@ -170,7 +166,6 @@ def download_minio_object(key:str, bucket:str = None) -> str:
     return temp_path
 
 # --- Webhook endpoint ---
-
 @app.post("/minio-events")
 async def minio_events(request: Request):
     data = await request.json()
@@ -178,10 +173,10 @@ async def minio_events(request: Request):
         return {"error": "Missing Records field."}
     for record in data["Records"]:
         event_name = record['eventName']
-        object_key = record['s3']['object']['key']
+        object_key_raw = record['s3']['object']['key']
+        object_key = unquote_plus(object_key_raw)      # <------- THIS IS THE KEY CHANGE
         bucket_name = record['s3']['bucket']['name']
         print(f"MinIO event: {event_name} {object_key} in {bucket_name}")
-
         if event_name.startswith('s3:ObjectCreated:') and object_key.endswith('.md'):
             old_file_id = MAPPING.get(object_key)
             if old_file_id:
@@ -195,7 +190,6 @@ async def minio_events(request: Request):
                 except Exception as e:
                     print(f"[Warning] Failed to delete file {old_file_id} in WebUI: {e}")
                 MAPPING.remove(object_key)
-
             local_path = download_minio_object(object_key, bucket_name)
             try:
                 upload_resp = upload_file(local_path)
@@ -221,7 +215,6 @@ async def minio_events(request: Request):
                 MAPPING.remove(object_key)
             else:
                 print(f"[Warning] {object_key}: No known file_id mapping for delete event.")
-
     return {"success": True}
 
 @app.post("/sync-bucket")
@@ -231,7 +224,6 @@ def sync_bucket():
     uploaded = []
     already_in_owui = []
     errors = []
-
     for page in paginator.paginate(Bucket=MINIO_BUCKET):
         for obj in page.get('Contents', []):
             object_key = obj['Key']
@@ -261,7 +253,6 @@ def sync_bucket():
             except Exception as e:
                 print(f"[ERR] Failed {object_key}: {e}")
                 errors.append({"object_key":object_key, "error":str(e)})
-
     return {
         "uploaded": uploaded,
         "already_in_owui": already_in_owui,
